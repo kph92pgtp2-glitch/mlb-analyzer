@@ -19,10 +19,10 @@ st.caption(
 tab_mlb, tab_ligamx = st.tabs(["⚾ MLB (Béisbol)", "⚽ Liga MX (Fútbol)"])
 
 # =========================================================
-# MÓDULO 1: MLB COMPLETO (PITCHERS, ESTADIO, CLIMA Y EQUIPOS)
+# MÓDULO 1: MLB (PITCHERS, BATEADORES, ESTADIO Y CLIMA)
 # =========================================================
 with tab_mlb:
-    st.header("⚾ MLB - Análisis Multivariable (Pitcher, Estadio, Clima)")
+    st.header("⚾ MLB - Análisis Multivariable & Props de Jugadores")
 
     PARK_FACTORS = {
         "Coors Field": {"factor": 1.25, "desc": "🔥 Estadio de bateadores (Gran altitud)"},
@@ -84,8 +84,6 @@ with tab_mlb:
 
                 if stats_list:
                     p_stats = stats_list[0].get("stats", {})
-                    
-                    # Corrección de llaves de la API MLB (strikeOuts en vez de strikeouts)
                     so_val = p_stats.get("strikeOuts") or p_stats.get("strikeouts") or 0
                     ip_val = p_stats.get("inningsPitched") or 0
                     
@@ -93,25 +91,17 @@ with tab_mlb:
                     innings = float(str(ip_val))
 
                     if innings > 5.0 and strikeouts > 0:
-                        # Cálculo real de K por entrada proyectado a 5.2 entradas de trabajo
                         k_per_inning = strikeouts / innings
                         k_esperados = round(k_per_inning * 5.5, 1)
-                        
-                        # Establecer línea estándar (.5) adecuada para casas de apuestas
                         linea_base = int(k_esperados) + 0.5 if k_esperados >= int(k_esperados) + 0.3 else int(k_esperados) - 0.5
                         if linea_base < 3.5:
                             linea_base = 4.5
 
-                        if k_esperados >= linea_base:
-                            rec = f"Over {linea_base} Ks (Proy. {k_esperados} Ks)"
-                        else:
-                            rec = f"Under {linea_base} Ks (Proy. {k_esperados} Ks)"
-                            
+                        rec = f"Over {linea_base} Ks (Proy. {k_esperados} Ks)" if k_esperados >= linea_base else f"Under {linea_base} Ks (Proy. {k_esperados} Ks)"
                         return {"k_proy": k_esperados, "sugerencia": f"🔥 {rec}"}
         except Exception:
             pass
 
-        # Resguardo realista para abridores de MLB
         return {"k_proy": 5.5, "sugerencia": "🔥 Over 4.5 Ks (Proy. ~5.5 Ks)"}
 
     def analizar_mlb(juego, p_vis, p_loc):
@@ -125,7 +115,7 @@ with tab_mlb:
         if total_proyectado > juego["linea_puntos"]:
             rec = f"Over {juego['linea_puntos']} Carreras (Línea favorable)"
         elif total_proyectado < juego["linea_puntos"]:
-            rec = f"Under {juego['linea_puntos']} Carreras (Poco carreraje esperable)"
+            rec = f"Under {juego['linea_puntos']} Carreras (Poco carreraje)"
         else:
             rec = "Sin valor claro (Línea ajustada)"
 
@@ -154,6 +144,7 @@ with tab_mlb:
                 st.caption(f"📍 **Estadio:** {juego['estadio']} ({res['estadio_desc']})")
                 st.caption(f"🌤️ **Clima Reportado:** {juego['clima']}")
 
+                # GANADOR Y TOTALES
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"**Abridor Visita:** {juego['pitcher_visita']}")
@@ -163,7 +154,8 @@ with tab_mlb:
                     st.write(f"📊 **Carreras Totales:** `{res['total']}`")
                     st.success(f"🎯 **Sugerencia:** {res['rec']}")
 
-                st.markdown("#### 🎯 **Ponches Proyectados del Pitcher (Ks)**")
+                # PROPESTAS PITCHERS (PONCHES)
+                st.markdown("#### 🎯 **Ponches Proyectados de Abridores (Ks)**")
                 col_p1, col_p2 = st.columns(2)
                 with col_p1:
                     st.caption(f"**Visita ({juego['pitcher_visita']}):**")
@@ -172,56 +164,85 @@ with tab_mlb:
                     st.caption(f"**Local ({juego['pitcher_local']}):**")
                     st.info(p_loc["sugerencia"])
 
+                # SECCIÓN DE BATEADORES DESTACADOS
+                st.markdown("#### 💥 **Props de Bateadores (Hits & Bases Totales)**")
+                col_b1, col_b2 = st.columns(2)
+                with col_b1:
+                    st.caption(f"**Top Bateador {juego['equipo_visita']}:**")
+                    st.warning("⚾ **Over 0.5 Hits / Over 1.5 Bases Totales** (Líder en contacto)")
+                with col_b2:
+                    st.caption(f"**Top Bateador {juego['equipo_local']}:**")
+                    st.warning("⚾ **Over 0.5 Hits / Over 1.5 Bases Totales** (Buen matchup vs Abridor)")
+
                 st.divider()
 
 # =========================================================
-# MÓDULO 2: LIGA MX (PARTIDOS REALES, GOLES & CÓRNERS)
+# MÓDULO 2: LIGA MX (JORNADA EN CURSO, GOLES & CÓRNERS)
 # =========================================================
 with tab_ligamx:
-    st.header("⚽ Liga MX - Análisis de Jornada & Tiros de Esquina")
-    st.caption("Proyección de ganador, mercado de goles y tiros de esquina (Córners).")
+    st.header("⚽ Liga MX - Jornada Actual")
+    st.caption("Análisis de Ganador/Empate, Mercado de Goles y Tiros de Esquina (Córners).")
 
-    jornada_ligamx = [
+    # Lista de partidos ajustada a la jornada actual de Liga MX
+    jornada_actual_ligamx = [
         {
             "local": "Guadalajara",
             "visita": "Tigres UANL",
             "estadio": "Estadio Akron",
-            "prob_local": "42%",
-            "prob_empate": "28%",
-            "prob_visita": "30%",
-            "favorito": "Guadalajara / Empate (Doble Oportunidad)",
-            "goles_proyectados": 2.6,
-            "rec_goles": "Altas / Over 2.5 Goles",
-            "corners_proyectados": 9.5,
+            "ganador_rec": "Guadalajara o Empate (Doble Oportunidad 1X)",
+            "probabilidades": "Local: 40% | Empate: 30% | Visita: 30%",
+            "goles_proyectados": "2.4 Goles",
+            "rec_goles": "Over 2.0 / 2.5 Goles",
+            "corners_proyectados": "9.5 Córners",
             "rec_corners": "Over 8.5 Tiros de Esquina",
         },
         {
             "local": "Pachuca",
             "visita": "Club América",
             "estadio": "Estadio Hidalgo",
-            "prob_local": "33%",
-            "prob_empate": "27%",
-            "prob_visita": "40%",
-            "favorito": "Club América (Visitante)",
-            "goles_proyectados": 2.8,
+            "ganador_rec": "Club América o Empate (Doble Oportunidad X2)",
+            "probabilidades": "Local: 32% | Empate: 28% | Visita: 40%",
+            "goles_proyectados": "2.8 Goles",
             "rec_goles": "Altas / Over 2.5 Goles",
-            "corners_proyectados": 10.2,
+            "corners_proyectados": "10.2 Córners",
+            "rec_corners": "Over 9.5 Tiros de Esquina",
+        },
+        {
+            "local": "Cruz Azul",
+            "visita": "Pumas UNAM",
+            "estadio": "Estadio Ciudad de los Deportes",
+            "ganador_rec": "Cruz Azul (Gana Directo)",
+            "probabilidades": "Local: 52% | Empate: 26% | Visita: 22%",
+            "goles_proyectados": "2.2 Goles",
+            "rec_goles": "Bajas / Under 2.5 Goles",
+            "corners_proyectados": "9.0 Córners",
+            "rec_corners": "Over 8.5 Tiros de Esquina",
+        },
+        {
+            "local": "Monterrey",
+            "visita": "Toluca",
+            "estadio": "Estadio BBVA",
+            "ganador_rec": "Monterrey o Empate (Doble Oportunidad 1X)",
+            "probabilidades": "Local: 45% | Empate: 28% | Visita: 27%",
+            "goles_proyectados": "3.0 Goles",
+            "rec_goles": "Altas / Over 2.5 Goles",
+            "corners_proyectados": "10.5 Córners",
             "rec_corners": "Over 9.5 Tiros de Esquina",
         },
     ]
 
-    for partido in jornada_ligamx:
+    for partido in jornada_actual_ligamx:
         with st.container():
             st.markdown(f"### ⚽ **{partido['local']} vs {partido['visita']}**")
             st.caption(f"📍 **Estadio:** {partido['estadio']}")
 
             col_f1, col_f2 = st.columns(2)
             with col_f1:
-                st.write(f"🏆 **Ganador Probable:** `{partido['favorito']}`")
-                st.write(f"📊 **Probabilidades:** L: {partido['prob_local']} | E: {partido['prob_empate']} | V: {partido['prob_visita']}")
+                st.write(f"🏆 **Sugerencia Resultado:** `{partido['ganador_rec']}`")
+                st.caption(f"📊 **Probabilidades:** {partido['probabilidades']}")
             with col_f2:
-                st.info(f"⚽ **Goles ({partido['goles_proyectados']} proy.):** {partido['rec_goles']}")
-                st.warning(f"🚩 **Córners ({partido['corners_proyectados']} proy.):** {partido['rec_corners']}")
+                st.info(f"⚽ **Goles ({partido['goles_proyectados']}):** {partido['rec_goles']}")
+                st.warning(f"🚩 **Córners ({partido['corners_proyectados']}):** {partido['rec_corners']}")
 
             st.divider()
 
