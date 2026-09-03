@@ -24,7 +24,6 @@ tab_mlb, tab_ligamx = st.tabs(["⚾ MLB (Béisbol)", "⚽ Liga MX (Fútbol)"])
 with tab_mlb:
     st.header("⚾ MLB - Análisis Multivariable (Pitcher, Estadio, Clima)")
 
-    # Diccionario de Park Factors (Estadios bateadores vs lanzadores)
     PARK_FACTORS = {
         "Coors Field": {"factor": 1.25, "desc": "🔥 Estadio de bateadores (Gran altitud)"},
         "Fenway Park": {"factor": 1.10, "desc": "🔥 Favorece a bateadores"},
@@ -47,7 +46,6 @@ with tab_mlb:
                 if juego.get("status") in ["Scheduled", "Pre-Game", "In Progress", "Warmup"]:
                     g_id = juego.get("game_id")
                     
-                    # Extraer Clima desde la API de MLB
                     clima_text = "☀️ Despejado ~ 75°F (Normal)"
                     try:
                         box = statsapi.boxscore_data(g_id)
@@ -92,20 +90,21 @@ with tab_mlb:
                     if innings > 10:
                         k_per_inning = strikeouts / innings
                         k_esperados = round(k_per_inning * 5.5, 1)
-                        linea = round(k_esperados - 0.5, 0) + 0.5
+                        linea = round(k_esperados) - 0.5 if round(k_esperados) > k_esperados else round(k_esperados) + 0.5
+                        if linea < 3.5:
+                            linea = 4.5
                         
-                        rec = f"Over {linea} Ks (Proy. {k_esperados} Ks)" if k_esperados >= 5.0 else f"Under {linea} Ks (Proy. {k_esperados} Ks)"
-                        return {"k_proy": k_esperados, "sugerencia": rec}
+                        rec = f"Over {linea} Ks (Proy. {k_esperados} Ks)" if k_esperados >= linea else f"Under {linea} Ks (Proy. {k_esperados} Ks)"
+                        return {"k_proy": k_esperados, "sugerencia": f"🔥 {rec}"}
         except Exception:
             pass
 
-        return {"k_proy": 5.0, "sugerencia": "🔥 Proyección general: Over 4.5 Ks (~5.2 Ks)"}
+        return {"k_proy": 5.2, "sugerencia": "🔥 Over 4.5 Ks (Proy. ~5.2 Ks)"}
 
     def analizar_mlb(juego, p_vis, p_loc):
         estadio_info = PARK_FACTORS.get(juego["estadio"], {"factor": 1.0, "desc": "⚖️ Estadio Neutral"})
         factor_estadio = estadio_info["factor"]
 
-        # Ajuste de carreras según pitchers y estadio
         carreras_base_local = (9.0 - p_vis["k_proy"] * 0.4) * factor_estadio
         carreras_base_visita = (9.0 - p_loc["k_proy"] * 0.4) * factor_estadio
         total_proyectado = round(carreras_base_local + carreras_base_visita, 1)
@@ -139,21 +138,18 @@ with tab_mlb:
             with st.container():
                 st.markdown(f"### ⚾ **{juego['equipo_visita']} @ {juego['equipo_local']}**")
                 
-                # METADATOS: ESTADIO Y CLIMA
                 st.caption(f"📍 **Estadio:** {juego['estadio']} ({res['estadio_desc']})")
                 st.caption(f"🌤️ **Clima Reportado:** {juego['clima']}")
 
-                # ANÁLISIS DE PARTIDO Y GANADOR
                 col1, col2 = st.columns(2)
                 with col1:
                     st.write(f"**Abridor Visita:** {juego['pitcher_visita']}")
                     st.write(f"**Abridor Local:** {juego['pitcher_local']}")
                 with col2:
                     st.write(f"🏆 **Ganador Proyectado:** `{res['ganador']}`")
-                    st.write(f"📊 **Carreras Totales Proyectadas:** `{res['total']}`")
+                    st.write(f"📊 **Carreras Totales:** `{res['total']}`")
                     st.success(f"🎯 **Sugerencia:** {res['rec']}")
 
-                # PROYECCIÓN DE PONCHES POR PITCHER
                 st.markdown("#### 🎯 **Ponches Proyectados del Pitcher (Ks)**")
                 col_p1, col_p2 = st.columns(2)
                 with col_p1:
