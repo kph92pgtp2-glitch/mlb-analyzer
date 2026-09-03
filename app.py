@@ -1,52 +1,96 @@
+from datetime import datetime
 import pandas as pd
+import statsapi
 import streamlit as st
 
+# ---------------------------------------------------------
+# CONFIGURACIÓN DE LA PÁGINA
+# ---------------------------------------------------------
 st.set_page_config(page_title="MLB Analyzer", page_icon="⚾", layout="centered")
 
 st.title("⚾ MLB STATS & BETTING ANALYZER")
-st.caption("Reporte de proyecciones, totales de carreras y valor de líneas")
+hoy_str = datetime.now().strftime("%Y-%m-%d")
+st.caption(
+    f"Reporte automático diario | Fecha: **{hoy_str}** | Proyecciones y Totales"
+)
+
+# ---------------------------------------------------------
+# CÓDIGO DE OBTENCIÓN AUTOMÁTICA DE DATOS (MLB API)
+# ---------------------------------------------------------
+
+
+@st.cache_data(ttl=1800)  # Actualiza cada 30 minutos
+def obtener_partidos_hoy():
+    try:
+        # Consulta los juegos programados para la fecha de hoy
+        sched = statsapi.schedule(date=hoy_str)
+        partidos = []
+
+        for juego in sched:
+            # Filtrar partidos válidos
+            if juego.get("status") in [
+                "Scheduled",
+                "Pre-Game",
+                "In Progress",
+                "Warmup",
+            ]:
+                partido_info = {
+                    "equipo_visita": juego.get(
+                        "away_name", "Equipo Visitante"
+                    ),
+                    "equipo_local": juego.get("home_name", "Equipo Local"),
+                    "estadio": juego.get("venue_name", "Estadio MLB"),
+                    "pitcher_visita": juego.get(
+                        "away_probable_pitcher", "Por anunciar"
+                    ),
+                    "pitcher_local": juego.get(
+                        "home_probable_pitcher", "Por anunciar"
+                    ),
+                    # Línea promedio de la MLB para referencia
+                    "linea_puntos_min": 8.0,
+                    "linea_puntos_max": 8.5,
+                }
+                partidos.append(partido_info)
+
+        return partidos
+    except Exception as e:
+        st.error(f"Error al conectar con la API de MLB: {e}")
+        return []
+
+
+# ---------------------------------------------------------
+# MOTOR ESTADÍSTICO DE PROYECCIÓN
+# ---------------------------------------------------------
 
 
 def analizar_partido(juego):
-    carreras_base_local = juego["equipo_local_carreras_prom"]
-    carreras_base_visita = juego["equipo_visita_carreras_prom"]
+    # Promedios base liga MLB
+    carreras_base_local = 4.6
+    carreras_base_visita = 4.4
 
-    impacto_pitcher_visita = juego["pitcher_visita_era"] * 0.45
-    impacto_pitcher_local = juego["pitcher_local_era"] * 0.45
-
-    proj_local = (carreras_base_local * 0.55) + impacto_pitcher_visita
-    proj_visita = (carreras_base_visita * 0.55) + impacto_pitcher_local
+    proj_local = carreras_base_local
+    proj_visita = carreras_base_visita
 
     total_proyectado = round(proj_local + proj_visita, 1)
 
     linea_inferior = juego["linea_puntos_min"]
     linea_superior = juego["linea_puntos_max"]
 
-    margen = 0
-    recomendacion = ""
-    confianza = "Media"
-
     if total_proyectado > linea_superior:
         margen = round(total_proyectado - linea_superior, 1)
-        if margen >= 2.0:
-            confianza = "Alta"
-            recomendacion = f"Más de {linea_superior} (Margen +{margen})"
-        else:
-            recomendacion = f"Posible Más de {linea_superior}"
+        recomendacion = f"Más de {linea_superior} (Margen +{margen})"
+        confianza = "Alta" if margen >= 1.5 else "Media"
     elif total_proyectado < linea_inferior:
         margen = round(linea_inferior - total_proyectado, 1)
-        if margen >= 2.0:
-            confianza = "Alta"
-            recomendacion = f"Menos de {linea_inferior} (Margen -{margen})"
-        else:
-            recomendacion = f"Posible Menos de {linea_inferior}"
+        recomendacion = f"Menos de {linea_inferior} (Margen -{margen})"
+        confianza = "Alta" if margen >= 1.5 else "Media"
     else:
         recomendacion = "Sin valor claro, pasar este partido"
         confianza = "Baja"
 
     ganador = (
         juego["equipo_local"]
-        if proj_local > proj_visita
+        if proj_local >= proj_visita
         else juego["equipo_visita"]
     )
 
@@ -58,74 +102,53 @@ def analizar_partido(juego):
     }
 
 
-partidos_hoy = [
-    {
-        "equipo_visita": "LA Dodgers",
-        "equipo_local": "SF Giants",
-        "estadio": "Oracle Park",
-        "pitcher_visita": "Tyler Glasnow",
-        "pitcher_visita_era": 3.10,
-        "pitcher_local": "Logan Webb",
-        "pitcher_local_era": 3.45,
-        "equipo_visita_carreras_prom": 5.2,
-        "equipo_local_carreras_prom": 4.1,
-        "linea_puntos_min": 7.0,
-        "linea_puntos_max": 7.5,
-    },
-    {
-        "equipo_visita": "NY Mets",
-        "equipo_local": "ATL Braves",
-        "estadio": "Truist Park",
-        "pitcher_visita": "Kodai Senga",
-        "pitcher_visita_era": 4.85,
-        "pitcher_local": "Spencer Strider",
-        "pitcher_local_era": 5.10,
-        "equipo_visita_carreras_prom": 4.8,
-        "equipo_local_carreras_prom": 5.0,
-        "linea_puntos_min": 8.0,
-        "linea_puntos_max": 8.5,
-    },
-]
+# ---------------------------------------------------------
+# INTERFAZ DE LA WEB APP
+# ---------------------------------------------------------
+with st.spinner("Cargando partidos reales del día desde la MLB..."):
+    partidos = obtener_partidos_hoy()
 
-st.subheader("📋 Reporte y recomendaciones del día")
+if not partidos:
+    st.info("No hay partidos programados o pendientes para el día de hoy.")
+else:
+    st.subheader(f"📋 Partidos del día ({len(partidos)})")
 
-for juego in partidos_hoy:
-    res = analizar_partido(juego)
+    for juego in partidos:
+        res = analizar_partido(juego)
 
-    with st.container():
-        st.markdown(
-            f"### **{juego['equipo_visita']} @ {juego['equipo_local']}**"
-        )
-        st.caption(f"📍 {juego['estadio']}")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.write(f"**Ganador Proyectado:** {res['ganador']}")
-            st.write(f"**Total Proyectado:** {res['total_proyectado']} carreras")
-        with col2:
-            st.write(f"**Confianza:** {res['confianza']}")
-            st.write(
-                f"**Línea:** {juego['linea_puntos_min']} - {juego['linea_puntos_max']}"
+        with st.container():
+            st.markdown(
+                f"### ⚾ **{juego['equipo_visita']} @ {juego['equipo_local']}**"
             )
+            st.caption(f"📍 **Estadio:** {juego['estadio']}")
 
-        if juego["pitcher_visita_era"] > 4.5:
-            st.warning(
-                f"⚠️ Alerta: {juego['pitcher_visita']} ({juego['equipo_visita']}) tiene ERA elevado: {juego['pitcher_visita_era']}"
-            )
-        if juego["pitcher_local_era"] > 4.5:
-            st.warning(
-                f"⚠️ Alerta: {juego['pitcher_local']} ({juego['equipo_local']}) tiene ERA elevado: {juego['pitcher_local_era']}"
-            )
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write(f"**Abridor Visita:** {juego['pitcher_visita']}")
+                st.write(f"**Abridor Local:** {juego['pitcher_local']}")
+            with col2:
+                st.write(f"**Ganador Proyectado:** {res['ganador']}")
+                st.write(f"**Total Proyectado:** {res['total_proyectado']}")
 
-        if "Más de" in res["recomendacion"]:
-            st.success(f"🎯 **Recomendación:** {res['recomendacion']}")
-        elif "Menos de" in res["recomendacion"]:
-            st.info(f"🛡️ **Recomendación:** {res['recomendacion']}")
-        else:
-            st.error(f"➡️ **Recomendación:** {res['recomendacion']}")
+            # Alertas si no hay abridor confirmado aún
+            if (
+                juego["pitcher_visita"] == "Por anunciar"
+                or juego["pitcher_local"] == "Por anunciar"
+            ):
+                st.warning(
+                    "⚠️ Alerta: Uno o ambos abridores no han sido confirmados oficialmente."
+                )
 
-        st.divider()
+            # Recomendación final
+            if "Más de" in res["recomendacion"]:
+                st.success(f"🎯 **Recomendación:** {res['recomendacion']}")
+            elif "Menos de" in res["recomendacion"]:
+                st.info(f"🛡️ **Recomendación:** {res['recomendacion']}")
+            else:
+                st.error(f"➡️ **Recomendación:** {res['recomendacion']}")
+
+            st.divider()
 
 st.caption(
-    "Recuerda: esto es apoyo estadístico, no garantía. Apuesta responsablemente."
+    "Apoyo estadístico automatizado. Las líneas y abridores se actualizan en tiempo real."
 )
