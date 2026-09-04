@@ -6,7 +6,7 @@ import requests
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE LA PÁGINA
 # ---------------------------------------------------------
-st.set_page_config(page_title="MLB & Liga MX Analytics", layout="wide", page_icon="⚾")
+st.set_page_config(page_title="MLB Analytics Pro", layout="wide", page_icon="⚾")
 
 if "tracker_apuestas" not in st.session_state:
     st.session_state.tracker_apuestas = []
@@ -16,30 +16,50 @@ st.title("⚾ MLB & Liga MX Analizador Pro")
 tab1, tab2, tab3 = st.tabs(["⚾ MLB Cartelera del Día", "⚽ Liga MX Calculator", "📈 Tracker de Aciertos"])
 
 # ---------------------------------------------------------
-# TAB 1: CARTELERA MLB AUTOMÁTICA
+# FUNCIÓN AUXILIAR: OBTENER ESTADO DE PLAYOFFS / URGENCIA
+# ---------------------------------------------------------
+@st.cache_data(ttl=3600)
+def obtener_contexto_equipos():
+    """Consulta la API de Standings de MLB para etiquetar urgencia automática."""
+    contexto = {}
+    try:
+        url = "https://statsapi.mlb.com/api/v1/standings?leagueId=103,104"
+        r = requests.get(url, timeout=5).json()
+        records = r.get("records", [])
+        for rec in records:
+            team_records = rec.get("teamRecords", [])
+            for tr in team_records:
+                team_name = tr["team"]["name"]
+                clinch_status = tr.get("clinchIndicator", "")
+                gb = tr.get("gamesBack", "-")
+                wc_gb = tr.get("wildCardGamesBack", "-")
+                
+                # Criterio de etiqueta de Septiembre
+                if clinch_status in ["y", "z", "x"]:  # División o Wild Card amarrado
+                    tag = "🛡️ Clasificado Amarrado (Cuidando Brazos)"
+                    mult = 0.85
+                elif (wc_gb != "-" and float(wc_gb if wc_gb != "-" else 99) <= 4.0) or (gb != "-" and float(gb if gb != "-" else 99) <= 3.0):
+                    tag = "🔥 Pelea de Comodín/División (Urgencia Máxima)"
+                    mult = 1.15
+                else:
+                    tag = "⚾ Posición Regular / Sin Presión Directa"
+                    mult = 1.0
+                    
+                contexto[team_name] = {"tag": tag, "mult": mult}
+    except Exception:
+        pass
+    return contexto
+
+# ---------------------------------------------------------
+# TAB 1: CARTELERA MLB AUTOMÁTICA CON INTELIGENCIA DE TABLA
 # ---------------------------------------------------------
 with tab1:
     st.header("⚾ Cartelera y Lanzadores Probables de Hoy")
     fecha_hoy = datetime.date.today().strftime("%Y-%m-%d")
-    st.caption(f"Partidos programados para hoy ({fecha_hoy})")
+    st.caption(f"Partidos programados para hoy ({fecha_hoy}) | Análisis de Standings Automático 🤖")
 
-    # Modificador de Septiembre
-    factor_contexto = st.selectbox(
-        "🔥 Ajuste de Urgencia (Septiembre):",
-        [
-            "Normal / Regular",
-            "🔥 Pelea de Comodín/División (Lanzadores van más lejos / +15% Ks)",
-            "🛡️ Clasificado Amarrado (Cuidando Brazos / -15% Ks)"
-        ]
-    )
+    contexto_tabla = obtener_contexto_equipos()
 
-    mult_sep = 1.0
-    if "🔥" in factor_contexto:
-        mult_sep = 1.15
-    elif "🛡️" in factor_contexto:
-        mult_sep = 0.85
-
-    # Conexión API MLB
     url_mlb = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={fecha_hoy}&hydrate=probablePitcher,linescore"
     try:
         r = requests.get(url_mlb).json()
@@ -51,26 +71,29 @@ with tab1:
                 away_team = g["teams"]["away"]["team"]["name"]
                 home_team = g["teams"]["home"]["team"]["name"]
                 
-                # Lanzadores probables
                 pitcher_away = g["teams"]["away"].get("probablePitcher", {}).get("fullName", "Por Anunciar")
                 pitcher_home = g["teams"]["home"].get("probablePitcher", {}).get("fullName", "Por Anunciar")
+                
+                # Contexto automático por equipo
+                info_away = contexto_tabla.get(away_team, {"tag": "⚾ Normal", "mult": 1.0})
+                info_home = contexto_tabla.get(home_team, {"tag": "⚾ Normal", "mult": 1.0})
                 
                 with st.expander(f"🏟️ {away_team} vs {home_team}"):
                     c_a, c_h = st.columns(2)
                     
-                    # Abridor Visitante
                     with c_a:
                         st.markdown(f"**Abridor {away_team}:**")
                         st.write(f"👤 {pitcher_away}")
-                        k_proj_a = round(5.8 * mult_sep, 1)
+                        k_proj_a = round(5.8 * info_away["mult"], 1)
                         st.metric("Proyección Ponches (Ks)", f"~{k_proj_a} Ks")
+                        st.caption(f"Contexto: {info_away['tag']}")
                     
-                    # Abridor Local
                     with c_h:
                         st.markdown(f"**Abridor {home_team}:**")
                         st.write(f"👤 {pitcher_home}")
-                        k_proj_h = round(5.5 * mult_sep, 1)
+                        k_proj_h = round(5.5 * info_home["mult"], 1)
                         st.metric("Proyección Ponches (Ks)", f"~{k_proj_h} Ks")
+                        st.caption(f"Contexto: {info_home['tag']}")
         else:
             st.info("No hay partidos de MLB programados para la fecha de hoy.")
     except Exception as e:
