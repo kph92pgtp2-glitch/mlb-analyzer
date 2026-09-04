@@ -3,6 +3,8 @@ import pandas as pd
 import datetime
 import requests
 import os
+import re
+import unicodedata
 
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE LA PÁGINA
@@ -10,6 +12,14 @@ import os
 st.set_page_config(page_title="MLB Analytics Pro", layout="wide", page_icon="⚾")
 
 ARCH_TRACKER = "tracker_apuestas.csv"
+
+def limpiar_texto(texto):
+    """Elimina acentos y convierte a minúsculas para comparaciones exactas."""
+    if not isinstance(texto, str):
+        return ""
+    texto = unicodedata.normalize('NFD', texto)
+    texto = ''.join(c for c in texto if unicodedata.category(c) != 'Mn')
+    return texto.lower().strip()
 
 def cargar_tracker():
     if os.path.exists(ARCH_TRACKER):
@@ -156,6 +166,97 @@ def obtener_top_bateadores_equipo(team_id):
         return []
     except Exception:
         return []
+
+# ---------------------------------------------------------
+# MOTOR DE VERIFICACIÓN AUTOMÁTICA DE RESULTADOS (PRECISO)
+# ---------------------------------------------------------
+def verificar_resultados_automiaticos(df_tracker):
+    if df_tracker.empty:
+        return df_tracker, 0
+    
+    actualizados = 0
+    for idx, row in df_tracker.iterrows():
+        if row["Estado"] == "Pendiente ⏳" and row["Deporte"] == "MLB":
+            fecha = str(row["Fecha"])
+            pick = str(row["Pick"])
+            pick_limpio = limpiar_texto(pick)
+            
+            url_sched = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={fecha}"
+            try:
+                res_sched = requests.get(url_sched, timeout=5).json()
+                dates = res_sched.get("dates", [])
+                if not dates:
+                    continue
+                
+                juegos = dates[0].get("games", [])
+                for g in juegos:
+                    status_game = g.get("status", {}).get("abstractGameState", "")
+                    if status_game != "Final":
+                        continue
+                    
+                    game_pk = g.get("gamePk")
+                    url_box = f"https://statsapi.mlb.com/api/v1.1/game/{game_pk}/feed/live"
+                    res_box = requests.get(url_box, timeout=5).json()
+                    players = res_box.get("liveData", {}).get("boxscore", {}).get("teams", {})
+                    
+                    all_players = {}
+                    all_players.update(players.get("away", {}).get("players", {}))
+                    all_players.update(players.get("home", {}).get("players", {}))
+                    
+                    for p_id, p_info in all_players.items():
+                        nombre_raw = p_info.get("person", {}).get("fullName", "")
+                        nombre_limpio = limpiar_texto(nombre_raw)
+                        
+                        if nombre_limpio and nombre_limpio in pick_limpio:
+                            stats = p_info.get("stats", {})
+                            
+                            # 1. EVALUAR PITCHER (Ks)
+                            if "ks" in pick_limpio:
+                                pitch_stats = stats.get("pitching", {})
+                                strikeouts = pitch_stats.get("strikeOuts", None)
+                                if strikeouts is not None:
+                                    match = re.search(r'(OVER|UNDER)\s+([\d.]+)', pick, re.IGNORECASE)
+                                    if match:
+                                        direccion = match.group(1).upper()
+                                        linea = float(match.group(2))
+                                        
+                                        if strikeouts == linea:
+                                            nuevo_est = "Pendiente ⏳" # Caso de empate/línea entera
+                                        elif direccion == "OVER":
+                                            nuevo_est = "Ganada 🟢" if strikeouts > linea else "Perdida 🔴"
+                                        else:
+                                            nuevo_est = "Ganada 🟢" if strikeouts < linea else "Perdida 🔴"
+                                            
+                                        df_tracker.at[idx, "Estado"] = nuevo_est
+                                        actualizados += 1
+                            
+                            # 2. EVALUAR BATEADORES
+                            elif any(k in pick_limpio for k in ["hits", "carreras", "rbi"]):
+                                bat_stats = stats.get("batting", {})
+                                hits = bat_stats.get("hits", 0)
+                                runs = bat_stats.get("runs", 0)
+                                rbi = bat_stats.get("rbi", 0)
+                                
+                                if "over 0.5 hits" in pick_limpio:
+                                    df_tracker.at[idx, "Estado"] = "Ganada 🟢" if hits >= 1 else "Perdida 🔴"
+                                    actualizados += 1
+                                elif "hits+carreras+rbi" in pick_limpio:
+                                    total_comb = hits + runs + rbi
+                                    df_tracker.at[idx, "Estado"] = "Ganada 🟢" if total_comb >= 2 else "Perdida 🔴"
+                                    actualizados += 1
+                                elif "over 0.5 carreras" in pick_limpio:
+                                    df_tracker.at[idx, "Estado"] = "Ganada 🟢" if runs >= 1 else "Perdida 🔴"
+                                    actualizados += 1
+                                elif "over 0.5 rbi" in pick_limpio:
+                                    df_tracker.at[idx, "Estado"] = "Ganada 🟢" if rbi >= 1 else "Perdida 🔴"
+                                    actualizados += 1
+            except Exception:
+                pass
+                
+    if actualizados > 0:
+        guardar_tracker(df_tracker)
+        
+    return df_tracker, actualizados
 
 # ---------------------------------------------------------
 # TAB 1: PITCHERS (PONCHES)
@@ -318,17 +419,28 @@ with tab2:
         st.info("No hay partidos de MLB disponibles hoy para analizar bateo.")
 
 # ---------------------------------------------------------
-# TAB 3: TRACKER PERMANENTE
+# TAB 3: TRACKER PERMANENTE CON VERIFICACIÓN AUTOMÁTICA
 # ---------------------------------------------------------
 with tab3:
-    st.header("📈 Tracker de Aciertos (Permanente 💾)")
+    st.header("📈 Tracker de Aciertos (Automático 🤖)")
     df_tracker = cargar_tracker()
     
+    col_btn1, col_btn2 = st.columns([2, 3])
+    with col_btn1:
+        if st.button("🤖 Auto-Verificar Resultados Pendientes", type="primary"):
+            with st.spinner("Consultando boxscores oficiales de MLB..."):
+                df_tracker, cambiados = verificar_resultados_automiaticos(df_tracker)
+                if cambiados > 0:
+                    st.success(f"¡Se actualizaron {cambiados} apuesta(s) automáticamente!")
+                else:
+                    st.info("No se encontraron partidos finalizados para apuestas pendientes.")
+                st.rerun()
+
     with st.expander("➕ Entrada Manual / Agregar Otro Pick"):
         with st.form("form_tracker_manual"):
             f1, f2, f3 = st.columns(3)
             dep = f1.selectbox("Deporte", ["MLB", "Liga MX"])
-            pick_txt = f2.text_input("Apuesta (Ej: Shohei Ohtani Over 0.5 Hits)")
+            pick_txt = f2.text_input("Apuesta (Ej: Shohei Ohtani OVER 0.5 Hits)")
             est = f3.selectbox("Estado", ["Pendiente ⏳", "Ganada 🟢", "Perdida 🔴"])
             
             if st.form_submit_button("Guardar Entrada Manual 💾"):
@@ -341,7 +453,7 @@ with tab3:
 
     if not df_tracker.empty:
         st.markdown("---")
-        st.subheader("📋 Registro de Apuestas Guardadas")
+        st.subheader("📋 Registro de Apuestas")
         
         df_editado = st.data_editor(
             df_tracker,
@@ -352,9 +464,9 @@ with tab3:
             use_container_width=True
         )
         
-        if st.button("Guardar Cambios de Estado 🔄"):
+        if st.button("Guardar Cambios Manuales 🔄"):
             guardar_tracker(df_editado)
-            st.success("¡Historial actualizado correctamente!")
+            st.success("¡Historial actualizado!")
             st.rerun()
 
         g = len(df_editado[df_editado["Estado"] == "Ganada 🟢"])
