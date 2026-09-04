@@ -2,14 +2,27 @@ import streamlit as st
 import pandas as pd
 import datetime
 import requests
+import os
 
 # ---------------------------------------------------------
 # CONFIGURACIÓN DE LA PÁGINA
 # ---------------------------------------------------------
 st.set_page_config(page_title="MLB Analytics Pro", layout="wide", page_icon="⚾")
 
-if "tracker_apuestas" not in st.session_state:
-    st.session_state.tracker_apuestas = []
+ARCH_TRACKER = "tracker_apuestas.csv"
+
+# Cargar historial guardado en archivo
+def cargar_tracker():
+    if os.path.exists(ARCH_TRACKER):
+        try:
+            return pd.read_csv(ARCH_TRACKER)
+        except Exception:
+            return pd.DataFrame(columns=["Fecha", "Deporte", "Pick", "Estado"])
+    return pd.DataFrame(columns=["Fecha", "Deporte", "Pick", "Estado"])
+
+# Guardar historial en archivo
+def guardar_tracker(df):
+    df.to_csv(ARCH_TRACKER, index=False)
 
 st.title("⚾ MLB & Liga MX Analizador Quirúrgico")
 
@@ -45,7 +58,6 @@ def obtener_contexto_equipos():
 
 @st.cache_data(ttl=7200)
 def obtener_k_proyectado_pitcher(pitcher_id, mult_contexto):
-    """Obtiene las métricas reales del pitcher (K/9 e IP) de la API oficial."""
     if not pitcher_id:
         return 4.5
     try:
@@ -53,7 +65,7 @@ def obtener_k_proyectado_pitcher(pitcher_id, mult_contexto):
         r = requests.get(url, timeout=5).json()
         stats = r.get("people", [{}])[0].get("stats", [])
         
-        k9 = 7.5  # Base por defecto si no hay stats
+        k9 = 7.5
         ip = 5.0
         
         for s in stats:
@@ -73,7 +85,7 @@ def obtener_k_proyectado_pitcher(pitcher_id, mult_contexto):
         return round(5.0 * mult_contexto, 1)
 
 # ---------------------------------------------------------
-# TAB 1: CARTELERA MLB REAL
+# TAB 1: CARTELERA MLB REAL CON GUARDADO RÁPIDO
 # ---------------------------------------------------------
 with tab1:
     st.header("⚾ Cartelera y Lanzadores Probables de Hoy")
@@ -81,6 +93,7 @@ with tab1:
     st.caption(f"Partidos programados para hoy ({fecha_hoy}) | Métricas Reales de Pitcher en Vivo 📊")
 
     contexto_tabla = obtener_contexto_equipos()
+    df_tracker_actual = cargar_tracker()
 
     url_mlb = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={fecha_hoy}&hydrate=probablePitcher,linescore"
     try:
@@ -105,24 +118,59 @@ with tab1:
                 info_away = contexto_tabla.get(away_team, {"tag": "⚾ Normal", "mult": 1.0})
                 info_home = contexto_tabla.get(home_team, {"tag": "⚾ Normal", "mult": 1.0})
                 
-                # Proyección basada en stats reales
                 k_proj_a = obtener_k_proyectado_pitcher(id_away, info_away["mult"])
                 k_proj_h = obtener_k_proyectado_pitcher(id_home, info_home["mult"])
                 
                 with st.expander(f"🏟️ {away_team} vs {home_team}"):
                     c_a, c_h = st.columns(2)
                     
+                    # VISITANTE
                     with c_a:
                         st.markdown(f"**Abridor {away_team}:**")
-                        st.write(f"👤 {pitcher_away}")
+                        st.write(f"👤 **{pitcher_away}**")
                         st.metric("Proyección Real Ponches (Ks)", f"~{k_proj_a} Ks")
                         st.caption(f"Contexto: {info_away['tag']}")
-                    
+                        
+                        if pitcher_away != "Por Anunciar":
+                            with st.form(f"form_quick_{id_away}_a"):
+                                tipo = st.radio("Dirección", ["OVER 🟢", "UNDER 🔴"], horizontal=True, key=f"rad_a_{id_away}")
+                                linea_casa = st.number_input("Línea Casa (Ej. 4.5)", value=4.5, step=0.5, key=f"num_a_{id_away}")
+                                if st.form_submit_button("➕ Guardar Pick en Tracker"):
+                                    pick_formateado = f"{pitcher_away} {tipo.split()[0]} {linea_casa} Ks (Proj: ~{k_proj_a})"
+                                    nueva_fila = pd.DataFrame([{
+                                        "Fecha": fecha_hoy,
+                                        "Deporte": "MLB",
+                                        "Pick": pick_formateado,
+                                        "Estado": "Pendiente ⏳"
+                                    }])
+                                    df_tracker_actual = pd.concat([df_tracker_actual, nueva_fila], ignore_index=True)
+                                    guardar_tracker(df_tracker_actual)
+                                    st.success(f"¡Agregado: {pitcher_away}!")
+                                    st.rerun()
+
+                    # LOCAL
                     with c_h:
                         st.markdown(f"**Abridor {home_team}:**")
-                        st.write(f"👤 {pitcher_home}")
+                        st.write(f"👤 **{pitcher_home}**")
                         st.metric("Proyección Real Ponches (Ks)", f"~{k_proj_h} Ks")
                         st.caption(f"Contexto: {info_home['tag']}")
+                        
+                        if pitcher_home != "Por Anunciar":
+                            with st.form(f"form_quick_{id_home}_h"):
+                                tipo = st.radio("Dirección", ["OVER 🟢", "UNDER 🔴"], horizontal=True, key=f"rad_h_{id_home}")
+                                linea_casa = st.number_input("Línea Casa (Ej. 4.5)", value=4.5, step=0.5, key=f"num_h_{id_home}")
+                                if st.form_submit_button("➕ Guardar Pick en Tracker"):
+                                    pick_formateado = f"{pitcher_home} {tipo.split()[0]} {linea_casa} Ks (Proj: ~{k_proj_h})"
+                                    nueva_fila = pd.DataFrame([{
+                                        "Fecha": fecha_hoy,
+                                        "Deporte": "MLB",
+                                        "Pick": pick_formateado,
+                                        "Estado": "Pendiente ⏳"
+                                    }])
+                                    df_tracker_actual = pd.concat([df_tracker_actual, nueva_fila], ignore_index=True)
+                                    guardar_tracker(df_tracker_actual)
+                                    st.success(f"¡Agregado: {pitcher_home}!")
+                                    st.rerun()
         else:
             st.info("No hay partidos de MLB programados para la fecha de hoy.")
     except Exception as e:
@@ -149,33 +197,57 @@ with tab2:
     m2.metric("Córners Esperados Totales", round(corners_l + corners_v, 1))
 
 # ---------------------------------------------------------
-# TAB 3: TRACKER DE ACIERTOS
+# TAB 3: TRACKER DE ACIERTOS PERMANENTE Y EDITABLE
 # ---------------------------------------------------------
 with tab3:
-    st.header("📈 Tracker de Aciertos")
+    st.header("📈 Tracker de Aciertos (Permanente 💾)")
     
-    with st.form("form_tracker"):
-        f1, f2, f3 = st.columns(3)
-        dep = f1.selectbox("Deporte", ["MLB", "Liga MX"])
-        pick_txt = f2.text_input("Apuesta (Ej: Skubal OVER 5.5 Ks)")
-        est = f3.selectbox("Estado", ["Pendiente ⏳", "Ganada 🟢", "Perdida 🔴"])
-        
-        if st.form_submit_button("Guardar"):
-            if pick_txt:
-                st.session_state.tracker_apuestas.append({
-                    "Fecha": datetime.date.today().strftime("%Y-%m-%d"),
-                    "Deporte": dep,
-                    "Pick": pick_txt,
-                    "Estado": est
-                })
-                st.success("¡Guardado!")
+    df_tracker = cargar_tracker()
+    
+    with st.expander("➕ Entrada Manual / Agregar Otro Pick"):
+        with st.form("form_tracker_manual"):
+            f1, f2, f3 = st.columns(3)
+            dep = f1.selectbox("Deporte", ["MLB", "Liga MX"])
+            pick_txt = f2.text_input("Apuesta (Ej: Chris Sale OVER 4.5 Ks)")
+            est = f3.selectbox("Estado", ["Pendiente ⏳", "Ganada 🟢", "Perdida 🔴"])
+            
+            if st.form_submit_button("Guardar Entrada Manual 💾"):
+                if pick_txt:
+                    nueva_fila = pd.DataFrame([{
+                        "Fecha": datetime.date.today().strftime("%Y-%m-%d"),
+                        "Deporte": dep,
+                        "Pick": pick_txt,
+                        "Estado": est
+                    }])
+                    df_tracker = pd.concat([df_tracker, nueva_fila], ignore_index=True)
+                    guardar_tracker(df_tracker)
+                    st.success("¡Pick guardado!")
+                    st.rerun()
 
-    if st.session_state.tracker_apuestas:
-        df_log = pd.DataFrame(st.session_state.tracker_apuestas)
-        st.dataframe(df_log, use_container_width=True)
+    if not df_tracker.empty:
+        st.markdown("---")
+        st.subheader("📋 Registro de Apuestas Guardadas")
         
-        g = len(df_log[df_log["Estado"] == "Ganada 🟢"])
-        p = len(df_log[df_log["Estado"] == "Perdida 🔴"])
+        df_editado = st.data_editor(
+            df_tracker,
+            column_config={
+                "Estado": st.column_config.SelectboxColumn(
+                    "Estado",
+                    options=["Pendiente ⏳", "Ganada 🟢", "Perdida 🔴"],
+                    required=True
+                )
+            },
+            num_rows="dynamic",
+            use_container_width=True
+        )
+        
+        if st.button("Guardar Cambios de Estado 🔄"):
+            guardar_tracker(df_editado)
+            st.success("¡Historial actualizado correctamente!")
+            st.rerun()
+
+        g = len(df_editado[df_editado["Estado"] == "Ganada 🟢"])
+        p = len(df_editado[df_editado["Estado"] == "Perdida 🔴"])
         tot = g + p
         wr = round((g / tot) * 100, 1) if tot > 0 else 0.0
         
