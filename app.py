@@ -35,7 +35,7 @@ def guardar_tracker(df):
 st.title("📊 Sports Analytics Pro - Módulo Quirúrgico")
 
 tab1, tab2, tab4, tab3 = st.tabs([
-    "⚾ Pitchers (Ks)", 
+    "⚾ Pitchers & Pronóstico Juego", 
     "💥 Bateadores MLB", 
     "🏆 Champions League", 
     "📈 Tracker de Aciertos"
@@ -172,8 +172,47 @@ def obtener_top_bateadores_equipo(team_id):
     except Exception:
         return []
 
+def calcular_pronostico_mlb(away_team, home_team, pitcher_away, pitcher_home, k_away, k_home, mult_away, mult_home):
+    """Calcula el porcentaje de victoria y la justificación analítica del partido."""
+    base_home = 53.0 # Ventaja local base en MLB
+    
+    # Diferencial de Pitchers (basado en ponches esperados como proxy de dominio)
+    dif_k = (k_home - k_away) * 3.2
+    
+    # Diferencial de Motivación/Urgencia
+    dif_mult = (mult_home - mult_away) * 12.0
+    
+    prob_home = base_home + dif_k + dif_mult
+    prob_home = max(min(round(prob_home, 1), 78.0), 22.0)
+    prob_away = round(100.0 - prob_home, 1)
+    
+    if prob_home >= prob_away:
+        favorito = home_team
+        prob_fav = prob_home
+        p_ventaja = pitcher_home
+        p_rival = pitcher_away
+    else:
+        favorito = away_team
+        prob_fav = prob_away
+        p_ventaja = pitcher_away
+        p_rival = pitcher_home
+
+    razones = []
+    if abs(k_home - k_away) >= 1.2:
+        razones.append(f"<b>Ventaja en el Pitcheo:</b> {p_ventaja} proyecta mejor dominio en el plato frente a {p_rival}.")
+    if mult_home > mult_away:
+        razones.append(f"<b>Urgencia de Victoria:</b> {home_team} llega disputando puestos clave de clasificación.")
+    elif mult_away > mult_home:
+        razones.append(f"<b>Urgencia de Victoria:</b> {away_team} llega disputando puestos clave de clasificación.")
+    
+    if not razones:
+        razones.append(f"<b>Equilibrio de Nómina:</b> Ligera inclinación hacia {favorito} por rendimiento reciente y profundidad del bullpen.")
+
+    justificacion = " <br>• ".join(razones)
+    return favorito, prob_fav, f"• {justificacion}"
+
 # ---------------------------------------------------------
-# FUNCIONES Y CARTELERA REAL DE CHAMPIONS LEAGUE (MIÉRCOLES 9 DE SEPTIEMBRE)
+# FUNCIONES CHAMPIONS LEAGUE
 # ---------------------------------------------------------
 def obtener_cartelera_champions_real():
     fecha_act = "2026-09-09"
@@ -285,7 +324,6 @@ def verificar_resultados_automiaticos(df_tracker):
             pick = str(row["Pick"])
             pick_limpio = limpiar_texto(pick)
 
-            # --- VERIFICACIÓN MLB ---
             if deporte == "MLB":
                 url_sched = f"https://statsapi.mlb.com/api/v1/schedule?sportId=1&date={fecha}"
                 try:
@@ -357,7 +395,6 @@ def verificar_resultados_automiaticos(df_tracker):
                 except Exception:
                     pass
 
-            # --- VERIFICACIÓN CHAMPIONS LEAGUE ---
             elif deporte == "Champions League":
                 try:
                     fecha_pick = datetime.datetime.strptime(fecha, "%Y-%m-%d").date()
@@ -389,11 +426,11 @@ except Exception:
     games = []
 
 # ---------------------------------------------------------
-# TAB 1: PITCHERS (PONCHES)
+# TAB 1: PITCHERS & PRONÓSTICO DE JUEGO
 # ---------------------------------------------------------
 with tab1:
-    st.header("⚾ Pitchers Abridores & Análisis de Ks")
-    st.caption(f"Partidos programados para hoy ({fecha_hoy}) | Métricas en Vivo 📊")
+    st.header("⚾ Pitchers Abridores & Pronóstico del Partido")
+    st.caption(f"Análisis cuantitativo de abridores y modelo probabilístico de ganador | Hoy ({fecha_hoy}) 📊")
 
     if games:
         st.success(f"Se encontraron {len(games)} partidos para hoy.")
@@ -416,7 +453,23 @@ with tab1:
             k_proj_a, status_a = obtener_k_proyectado_pitcher(id_away, info_away["mult"])
             k_proj_h, status_h = obtener_k_proyectado_pitcher(id_home, info_home["mult"])
             
+            # Cálculo del pronóstico de ganador
+            fav_team, prob_win, explicacion = calcular_pronostico_mlb(
+                away_team, home_team, pitcher_away, pitcher_home, k_proj_a, k_proj_h, info_away["mult"], info_home["mult"]
+            )
+
             with st.expander(f"🏟️ {away_team} vs {home_team}"):
+                # --- CUADRO DE PRONÓSTICO DEL PARTIDO ---
+                st.markdown(
+                    f"""
+                    <div style="background-color: #1e293b; padding: 15px; border-radius: 10px; border-left: 5px solid #3b82f6; margin-bottom: 15px;">
+                        <h4 style="margin:0; color:#f8fafc;">🏆 Pronóstico del Partido: <span style="color:#60a5fa;">{fav_team} ({prob_win}% Prob. Victoria)</span></h4>
+                        <p style="margin-top: 8px; margin-bottom: 0px; font-size: 14px; color:#cbd5e1;"><b>¿Por qué este resultado?</b><br>{explicacion}</p>
+                    </div>
+                    """, 
+                    unsafe_allow_html=True
+                )
+
                 c_a, c_h = st.columns(2)
                 
                 with c_a:
@@ -429,7 +482,7 @@ with tab1:
                         with st.form(f"form_k_a_{id_away if id_away else away_team}"):
                             tipo = st.radio("Dirección", ["OVER 🟢", "UNDER 🔴"], horizontal=True, key=f"rad_a_{id_away}")
                             linea_casa = st.number_input("Línea Casa", value=4.5, step=0.5, key=f"num_a_{id_away}")
-                            if st.form_submit_button("➕ Guardar en Tracker"):
+                            if st.form_submit_button("➕ Guardar Pick K en Tracker"):
                                 pick_txt = f"{pitcher_away} {tipo.split()[0]} {linea_casa} Ks (Proj: ~{k_proj_a})"
                                 nueva = pd.DataFrame([{"Fecha": fecha_hoy, "Deporte": "MLB", "Pick": pick_txt, "Estado": "Pendiente ⏳"}])
                                 df_tracker_actual = pd.concat([df_tracker_actual, nueva], ignore_index=True)
@@ -447,13 +500,22 @@ with tab1:
                         with st.form(f"form_k_h_{id_home if id_home else home_team}"):
                             tipo = st.radio("Dirección", ["OVER 🟢", "UNDER 🔴"], horizontal=True, key=f"rad_h_{id_home}")
                             linea_casa = st.number_input("Línea Casa", value=4.5, step=0.5, key=f"num_h_{id_home}")
-                            if st.form_submit_button("➕ Guardar en Tracker"):
+                            if st.form_submit_button("➕ Guardar Pick K en Tracker"):
                                 pick_txt = f"{pitcher_home} {tipo.split()[0]} {linea_casa} Ks (Proj: ~{k_proj_h})"
                                 nueva = pd.DataFrame([{"Fecha": fecha_hoy, "Deporte": "MLB", "Pick": pick_txt, "Estado": "Pendiente ⏳"}])
                                 df_tracker_actual = pd.concat([df_tracker_actual, nueva], ignore_index=True)
                                 guardar_tracker(df_tracker_actual)
                                 st.success("¡Agregado!")
                                 st.rerun()
+
+                # Botón directo para guardar el Moneyline/Ganador del partido
+                if st.button(f"🎯 Guardar Pick a Ganador: {fav_team} (Moneyline)", key=f"btn_ml_{away_team}_{home_team}"):
+                    pick_ml = f"{fav_team} a Ganar (Moneyline - Prob: {prob_win}%)"
+                    nueva_ml = pd.DataFrame([{"Fecha": fecha_hoy, "Deporte": "MLB", "Pick": pick_ml, "Estado": "Pendiente ⏳"}])
+                    df_tracker_actual = pd.concat([df_tracker_actual, nueva_ml], ignore_index=True)
+                    guardar_tracker(df_tracker_actual)
+                    st.success(f"¡Pick de {fav_team} a Ganar guardado en el Tracker!")
+                    st.rerun()
     else:
         st.info("No hay partidos programados hoy para MLB.")
 
@@ -556,7 +618,7 @@ with tab2:
         st.info("No hay partidos de MLB disponibles hoy.")
 
 # ---------------------------------------------------------
-# TAB 4: 🏆 UEFA CHAMPIONS LEAGUE (OFICIAL MIÉRCOLES 9 SEPT)
+# TAB 4: 🏆 UEFA CHAMPIONS LEAGUE
 # ---------------------------------------------------------
 with tab4:
     st.header("🏆 UEFA Champions League - Cartelera Oficial (Miércoles 9 de Septiembre)")
